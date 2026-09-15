@@ -128,7 +128,8 @@ async function ensureConfigured(): Promise<void> {
   if (files.migratedLegacyConfig) {
     console.log(`Migrated legacy configuration to ${files.configPath}`);
   }
-  if (files.configExists && files.authExists) return;
+  const noAuth = process.env.DEVSPACE_AUTH_MODE?.trim().toLowerCase() === "none";
+  if (files.configExists && (files.authExists || noAuth)) return;
   if (process.env.DEVSPACE_OAUTH_OWNER_TOKEN) return;
 
   if (!input.isTTY || !output.isTTY) {
@@ -334,7 +335,11 @@ async function serve(): Promise<void> {
     if (config.allowedHosts.includes("*")) {
       console.warn("warning: Host header allowlist is disabled because server.allowedHosts contains '*'");
     }
-    console.log("auth: Owner password approval required");
+    console.log(
+      config.authMode === "none"
+        ? "auth: none (loopback only)"
+        : "auth: Owner password approval required",
+    );
     console.log(`logging: ${config.logging.level} ${config.logging.format}`);
     console.log(`subagent providers: ${formatLocalAgentProviderStatusSummary(localAgentProviders)}`);
   });
@@ -409,6 +414,7 @@ async function runDoctor(): Promise<void> {
     console.log(`Public MCP URL: ${new URL("/mcp", config.publicBaseUrl).toString()}`);
     console.log(`Allowed roots: ${config.allowedRoots.join(", ")}`);
     console.log(`Allowed hosts: ${config.allowedHosts.join(", ")}`);
+    console.log(`Auth mode: ${config.authMode}`);
     const providers = buildLocalAgentProviderStatuses(
       config.subagents,
       getLocalAgentProviderAvailabilitySnapshot(process.env, config.subagents),

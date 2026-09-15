@@ -128,6 +128,19 @@ Most users should connect through a public HTTPS tunnel:
 https://your-tunnel-host.example.com/mcp
 ```
 
+### Loopback No Auth mode
+
+For a trusted transport that already controls access to the local MCP server, such as OpenAI Secure Tunnel, DevSpace can skip its OAuth layer at runtime:
+
+```bash
+DEVSPACE_AUTH_MODE=none devspace serve
+```
+
+No Auth mode is deliberately restricted to a loopback listener. `server.host` must be `127.0.0.1`, `localhost`, or `::1`; DevSpace refuses to start this mode on `0.0.0.0`, a LAN address, or another non-loopback host. The default remains `oauth` when `DEVSPACE_AUTH_MODE` is unset.
+
+> [!WARNING]
+> No Auth removes DevSpace's own client authentication. Use it only when another trusted transport is the access boundary, and keep the MCP listener on loopback.
+
 > [!NOTE]
 > Using DevSpace as an MCP connector isn't against OpenAI's Usage Policies — it's
 > a standard custom App/connector setup, and writing or running code isn't a

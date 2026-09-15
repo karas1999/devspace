@@ -197,12 +197,13 @@ Linux; the tool is not registered on macOS, Windows, or BSD.
 
 ## Environment boundary
 
-Only two user-facing DevSpace environment variables remain:
+Only three user-facing DevSpace environment variables remain:
 
 | Variable | Purpose |
 | --- | --- |
 | `DEVSPACE_CONFIG_DIR` | Bootstrap location for `config.jsonc`, `auth.json`, skills, and profiles. |
 | `DEVSPACE_OAUTH_OWNER_TOKEN` | Optional secret override for the owner token stored in `auth.json`. |
+| `DEVSPACE_AUTH_MODE` | Runtime authentication mode: `oauth` (default) or `none`. `none` is allowed only when `server.host` is loopback (`127.0.0.1`, `localhost`, or `::1`). |
 
 Durable environment settings were removed in v1.1. Move existing deployment
 values to these JSONC keys:

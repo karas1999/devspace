@@ -21,7 +21,7 @@ import {
   isArtifactDownloadSupportedPlatform,
   registerArtifactTools,
 } from "./artifact-tools.js";
-import { loadConfig, type ServerConfig } from "./config.js";
+import { assertAuthModeHostSafe, loadConfig, type ServerConfig } from "./config.js";
 import {
   createOpenAIIncomingArtifactAdapter,
   type IncomingArtifactAdapter,
@@ -801,6 +801,14 @@ export function createServer(
   config = loadConfig(),
   options: CreateServerOptions = {},
 ): RunningServer {
+  assertAuthModeHostSafe(config.authMode, config.host);
+  if (config.authMode === "oauth" && !config.oauth) {
+    throw new Error("OAuth configuration is required when auth mode is oauth.");
+  }
+  if (config.authMode === "none" && config.oauth) {
+    throw new Error("OAuth configuration must be absent when auth mode is none.");
+  }
+
   const incomingArtifactAdapters = options.incomingArtifactAdapters
     ?? [createOpenAIIncomingArtifactAdapter()];
   const allowedHosts = config.allowedHosts.includes("*")
@@ -812,12 +820,16 @@ export function createServer(
   });
   const mcpUrl = new URL("/mcp", config.publicBaseUrl);
   const resourceServerUrl = resourceUrlFromServerUrl(mcpUrl);
-  const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir);
-  const bearerAuth = requireBearerAuth({
-    verifier: oauthProvider,
-    requiredScopes: [config.oauth.scopes[0] ?? "devspace"],
-    resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceServerUrl),
-  });
+  const oauthProvider = config.oauth
+    ? new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir)
+    : undefined;
+  const bearerAuth = oauthProvider && config.oauth
+    ? requireBearerAuth({
+        verifier: oauthProvider,
+        requiredScopes: [config.oauth.scopes[0] ?? "devspace"],
+        resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceServerUrl),
+      })
+    : undefined;
   const workspaceStore = createWorkspaceStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
@@ -892,16 +904,18 @@ export function createServer(
     next();
   });
 
-  app.use(
-    mcpAuthRouter({
-      provider: oauthProvider,
-      issuerUrl: new URL(config.publicBaseUrl),
-      baseUrl: new URL(config.publicBaseUrl),
-      resourceServerUrl,
-      scopesSupported: config.oauth.scopes,
-      resourceName: "DevSpace",
-    }),
-  );
+  if (oauthProvider && config.oauth) {
+    app.use(
+      mcpAuthRouter({
+        provider: oauthProvider,
+        issuerUrl: new URL(config.publicBaseUrl),
+        baseUrl: new URL(config.publicBaseUrl),
+        resourceServerUrl,
+        scopesSupported: config.oauth.scopes,
+        resourceName: "DevSpace",
+      }),
+    );
+  }
 
   app.options("/mcp-app-assets/{*asset}", (_req, res) => {
     setAssetHeaders(res);
@@ -925,24 +939,26 @@ export function createServer(
   app.all("/mcp", async (req, res) => {
     const requestId = res.locals.requestId as string | undefined;
 
-    await new Promise<void>((resolve, reject) => {
-      bearerAuth(req, res, (error?: unknown) => {
-        if (error) reject(error);
-        else resolve();
+    if (bearerAuth && oauthProvider) {
+      await new Promise<void>((resolve, reject) => {
+        bearerAuth(req, res, (error?: unknown) => {
+          if (error) reject(error);
+          else resolve();
+        });
       });
-    });
-    if (res.headersSent) return;
+      if (res.headersSent) return;
 
-    if (!req.auth?.resource || !oauthProvider.isResourceAllowed(req.auth.resource)) {
-      logEvent(config.logging, "warn", "auth_denied", {
-        requestId,
-        method: req.method,
-        path: requestPath(req),
-        reason: "invalid_oauth_resource",
-        ...requestLogFields(req, config),
-      });
-      sendJsonRpcError(res, 401, -32001, "Unauthorized");
-      return;
+      if (!req.auth?.resource || !oauthProvider.isResourceAllowed(req.auth.resource)) {
+        logEvent(config.logging, "warn", "auth_denied", {
+          requestId,
+          method: req.method,
+          path: requestPath(req),
+          reason: "invalid_oauth_resource",
+          ...requestLogFields(req, config),
+        });
+        sendJsonRpcError(res, 401, -32001, "Unauthorized");
+        return;
+      }
     }
 
     logEvent(config.logging, "debug", "mcp_request", {
@@ -979,7 +995,7 @@ export function createServer(
         }
         await toolActivities.waitForIdle();
         processSessions.shutdown();
-        oauthProvider.close();
+        oauthProvider?.close();
         workspaceStore.close?.();
       })();
       return closePromise;
@@ -1002,7 +1018,11 @@ if (await isMainModule()) {
       `devspace listening on http://${config.host}:${config.port}/mcp`,
     );
     console.log(`allowed roots: ${config.allowedRoots.join(", ")}`);
-    console.log("auth: oauth owner-token flow required");
+    console.log(
+      config.authMode === "none"
+        ? "auth: none (loopback only)"
+        : "auth: oauth owner-token flow required",
+    );
     console.log(`logging: ${config.logging.level} ${config.logging.format}`);
     console.log(`request logging: ${config.logging.requests ? "enabled" : "disabled"}`);
     console.log(`asset logging: ${config.logging.assets ? "enabled" : "disabled"}`);

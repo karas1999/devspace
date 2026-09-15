@@ -15,6 +15,7 @@ try {
   const defaults = loadConfig(env);
   assert.equal(defaults.host, "127.0.0.1");
   assert.equal(defaults.port, 7676);
+  assert.equal(defaults.authMode, "oauth");
   assert.equal(defaults.publicBaseUrl, "http://127.0.0.1:7676");
   assert.deepEqual(defaults.allowedRoots, [process.cwd()]);
   assert.deepEqual(defaults.allowedHosts, ["localhost", "127.0.0.1", "::1"]);
@@ -27,6 +28,7 @@ try {
     instructions: "on-demand",
     providers: [],
   });
+  assert.ok(defaults.oauth);
   assert.deepEqual(defaults.oauth.allowedResourceUrls, []);
   assert.deepEqual(defaults.logging, {
     level: "info",
@@ -83,6 +85,7 @@ try {
   assert.equal(configured.configDir, configDir);
   assert.equal(configured.host, "0.0.0.0");
   assert.equal(configured.port, 8787);
+  assert.equal(configured.authMode, "oauth");
   assert.equal(configured.publicBaseUrl, "https://devspace.example.com");
   assert.deepEqual(configured.allowedRoots, [resolve(homedir(), "work")]);
   assert.deepEqual(configured.allowedHosts, [
@@ -104,6 +107,7 @@ try {
   assert.equal(configured.agentDir, resolve(homedir(), "agent"));
   assert.equal(configured.subagents.enabled, true);
   assert.equal(configured.subagents.instructions, "preload");
+  assert.ok(configured.oauth);
   assert.equal(configured.oauth.ownerToken, "persisted-owner-token-long-enough");
   assert.equal(configured.oauth.accessTokenTtlSeconds, 120);
   assert.deepEqual(configured.oauth.scopes, ["devspace", "admin"]);
@@ -120,7 +124,7 @@ try {
     trustProxy: true,
   });
 
-  assert.equal(loadConfig(env).oauth.ownerToken, env.DEVSPACE_OAUTH_OWNER_TOKEN);
+  assert.equal(loadConfig(env).oauth?.ownerToken, env.DEVSPACE_OAUTH_OWNER_TOKEN);
 } finally {
   rmSync(configDir, { recursive: true, force: true });
 }
@@ -133,6 +137,44 @@ try {
   );
 } finally {
   rmSync(missingAuthDir, { recursive: true, force: true });
+}
+
+const noAuthDir = mkdtempSync(join(tmpdir(), "devspace-config-no-auth-mode-test-"));
+try {
+  const noAuthConfig = loadConfig({
+    DEVSPACE_CONFIG_DIR: noAuthDir,
+    DEVSPACE_AUTH_MODE: "none",
+  });
+  assert.equal(noAuthConfig.authMode, "none");
+  assert.equal(noAuthConfig.host, "127.0.0.1");
+  assert.equal(noAuthConfig.oauth, undefined);
+
+  assert.throws(
+    () => loadConfig({
+      DEVSPACE_CONFIG_DIR: noAuthDir,
+      DEVSPACE_AUTH_MODE: "invalid",
+    }),
+    /Invalid DEVSPACE_AUTH_MODE/,
+  );
+} finally {
+  rmSync(noAuthDir, { recursive: true, force: true });
+}
+
+const unsafeNoAuthDir = mkdtempSync(join(tmpdir(), "devspace-config-unsafe-no-auth-test-"));
+try {
+  writeDevspaceConfig({
+    configVersion: 1,
+    server: { host: "0.0.0.0" },
+  }, { DEVSPACE_CONFIG_DIR: unsafeNoAuthDir });
+  assert.throws(
+    () => loadConfig({
+      DEVSPACE_CONFIG_DIR: unsafeNoAuthDir,
+      DEVSPACE_AUTH_MODE: "none",
+    }),
+    /requires server\.host to be localhost, 127\.0\.0\.1, or ::1/,
+  );
+} finally {
+  rmSync(unsafeNoAuthDir, { recursive: true, force: true });
 }
 
 console.log("config tests passed");

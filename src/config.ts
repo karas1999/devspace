@@ -8,11 +8,14 @@ import type { SubagentsConfig } from "./local-agent-config.js";
 
 export type { ToolMode } from "./config-schema.js";
 
+export type AuthMode = "oauth" | "none";
+
 export interface ServerConfig {
   configDir: string;
   host: string;
   port: number;
-  oauth: OAuthConfig;
+  authMode: AuthMode;
+  oauth?: OAuthConfig;
   allowedRoots: string[];
   allowedHosts: string[];
   publicBaseUrl: string;
@@ -39,6 +42,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const publicBaseUrl = parsePublicBaseUrl(
     stored.server.publicBaseUrl ?? localPublicBaseUrl(host, port),
   );
+  const authMode = parseAuthMode(env.DEVSPACE_AUTH_MODE);
+  assertAuthModeHostSafe(authMode, host);
   const derivedAllowedHosts = [
     "localhost",
     "127.0.0.1",
@@ -52,16 +57,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     configDir: files.dir,
     host,
     port,
-    oauth: {
-      ownerToken: parseRequiredSecret(
-        env.DEVSPACE_OAUTH_OWNER_TOKEN ?? files.auth.ownerToken,
-      ),
-      accessTokenTtlSeconds: stored.oauth.accessTokenTtlSeconds,
-      refreshTokenTtlSeconds: stored.oauth.refreshTokenTtlSeconds,
-      scopes: stored.oauth.scopes,
-      allowedResourceUrls: stored.oauth.allowedResourceUrls,
-      allowedRedirectHosts: stored.oauth.allowedRedirectHosts,
-    },
+    authMode,
+    ...(authMode === "oauth" ? {
+      oauth: {
+        ownerToken: parseRequiredSecret(
+          env.DEVSPACE_OAUTH_OWNER_TOKEN ?? files.auth.ownerToken,
+        ),
+        accessTokenTtlSeconds: stored.oauth.accessTokenTtlSeconds,
+        refreshTokenTtlSeconds: stored.oauth.refreshTokenTtlSeconds,
+        scopes: stored.oauth.scopes,
+        allowedResourceUrls: stored.oauth.allowedResourceUrls,
+        allowedRedirectHosts: stored.oauth.allowedRedirectHosts,
+      },
+    } : {}),
     allowedRoots: normalizePaths(stored.workspaces.allowedRoots, [process.cwd()]),
     allowedHosts: normalizeAllowedHosts(derivedAllowedHosts),
     publicBaseUrl,
@@ -95,6 +103,20 @@ function normalizePath(path: string): string {
 function normalizeAllowedHosts(hosts: string[]): string[] {
   if (hosts.includes("*")) return ["*"];
   return Array.from(new Set(hosts.map((host) => host.trim()).filter(Boolean)));
+}
+
+function parseAuthMode(value: string | undefined): AuthMode {
+  const mode = value?.trim().toLowerCase() || "oauth";
+  if (mode === "oauth" || mode === "none") return mode;
+  throw new Error(`Invalid DEVSPACE_AUTH_MODE: ${value}. Expected "oauth" or "none".`);
+}
+
+export function assertAuthModeHostSafe(authMode: AuthMode, host: string): void {
+  if (authMode !== "none") return;
+  if (["localhost", "127.0.0.1", "::1"].includes(host.trim().toLowerCase())) return;
+  throw new Error(
+    "DEVSPACE_AUTH_MODE=none requires server.host to be localhost, 127.0.0.1, or ::1.",
+  );
 }
 
 function parseRequiredSecret(value: string | undefined): string {
