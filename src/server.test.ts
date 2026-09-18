@@ -393,6 +393,79 @@ test("open_workspace scopes checkout reuse to OpenAI session metadata", async (t
   assert.ok(Array.isArray(structuredContent(unscoped).agents_files));
 });
 
+test("DEVSPACE_AUTH_MODE=none allows unauthenticated MCP on loopback", async (t) => {
+  const previousAuthMode = process.env.DEVSPACE_AUTH_MODE;
+  process.env.DEVSPACE_AUTH_MODE = "none";
+
+  const root = await mkdtemp(join(tmpdir(), "devspace-no-auth-http-test-"));
+  const config = loadConfig(writeTestDevspaceConfig(join(root, ".config"), {
+    server: {
+      host: "127.0.0.1",
+      port: 1,
+      publicBaseUrl: "http://127.0.0.1:7677",
+    },
+    workspaces: {
+      allowedRoots: [root],
+      worktreeRoot: join(root, ".worktrees"),
+    },
+    storage: { stateDir: join(root, ".state") },
+  }));
+  let running: ReturnType<typeof createServer>;
+  try {
+    running = createServer(config, { incomingArtifactAdapters: [] });
+  } finally {
+    if (previousAuthMode === undefined) delete process.env.DEVSPACE_AUTH_MODE;
+    else process.env.DEVSPACE_AUTH_MODE = previousAuthMode;
+  }
+  const httpServer = running.app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve) => httpServer.once("listening", resolve));
+  t.after(async () => {
+    await new Promise<void>((resolve, reject) => {
+      httpServer.close((error) => error ? reject(error) : resolve());
+    });
+    await running.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const address = httpServer.address();
+  assert.ok(address && typeof address === "object");
+  const response = await postModernMcp(
+    `http://127.0.0.1:${address.port}`,
+    undefined,
+    "tools/list",
+    {},
+  );
+  assert.equal(response.status, 200, await response.clone().text());
+});
+
+test("DEVSPACE_AUTH_MODE=none rejects non-loopback server bindings", async () => {
+  const previousAuthMode = process.env.DEVSPACE_AUTH_MODE;
+  process.env.DEVSPACE_AUTH_MODE = "none";
+  const root = await mkdtemp(join(tmpdir(), "devspace-no-auth-non-loopback-test-"));
+  try {
+    const config = loadConfig(writeTestDevspaceConfig(join(root, ".config"), {
+      server: {
+        host: "0.0.0.0",
+        port: 1,
+        publicBaseUrl: "http://127.0.0.1:7677",
+      },
+      workspaces: {
+        allowedRoots: [root],
+        worktreeRoot: join(root, ".worktrees"),
+      },
+      storage: { stateDir: join(root, ".state") },
+    }));
+    assert.throws(
+      () => createServer(config, { incomingArtifactAdapters: [] }),
+      /DEVSPACE_AUTH_MODE=none is only allowed when server\.host is bound to loopback/,
+    );
+  } finally {
+    if (previousAuthMode === undefined) delete process.env.DEVSPACE_AUTH_MODE;
+    else process.env.DEVSPACE_AUTH_MODE = previousAuthMode;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("HTTP endpoint serves modern MCP and stateless legacy clients", async (t) => {
   const { root, localBaseUrl, accessToken } = await httpServerFixture(
     t,

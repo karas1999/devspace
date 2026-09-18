@@ -797,6 +797,24 @@ export interface CreateServerOptions {
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
 }
 
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return normalized === "127.0.0.1"
+    || normalized === "localhost"
+    || normalized === "::1"
+    || normalized === "[::1]";
+}
+
+function isLocalMcpAuthDisabled(config: ServerConfig): boolean {
+  if (process.env.DEVSPACE_AUTH_MODE?.trim().toLowerCase() !== "none") return false;
+  if (!isLoopbackHost(config.host)) {
+    throw new Error(
+      "DEVSPACE_AUTH_MODE=none is only allowed when server.host is bound to loopback.",
+    );
+  }
+  return true;
+}
+
 export function createServer(
   config = loadConfig(),
   options: CreateServerOptions = {},
@@ -812,6 +830,7 @@ export function createServer(
   });
   const mcpUrl = new URL("/mcp", config.publicBaseUrl);
   const resourceServerUrl = resourceUrlFromServerUrl(mcpUrl);
+  const localMcpAuthDisabled = isLocalMcpAuthDisabled(config);
   const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir);
   const bearerAuth = requireBearerAuth({
     verifier: oauthProvider,
@@ -925,24 +944,26 @@ export function createServer(
   app.all("/mcp", async (req, res) => {
     const requestId = res.locals.requestId as string | undefined;
 
-    await new Promise<void>((resolve, reject) => {
-      bearerAuth(req, res, (error?: unknown) => {
-        if (error) reject(error);
-        else resolve();
+    if (!localMcpAuthDisabled) {
+      await new Promise<void>((resolve, reject) => {
+        bearerAuth(req, res, (error?: unknown) => {
+          if (error) reject(error);
+          else resolve();
+        });
       });
-    });
-    if (res.headersSent) return;
+      if (res.headersSent) return;
 
-    if (!req.auth?.resource || !oauthProvider.isResourceAllowed(req.auth.resource)) {
-      logEvent(config.logging, "warn", "auth_denied", {
-        requestId,
-        method: req.method,
-        path: requestPath(req),
-        reason: "invalid_oauth_resource",
-        ...requestLogFields(req, config),
-      });
-      sendJsonRpcError(res, 401, -32001, "Unauthorized");
-      return;
+      if (!req.auth?.resource || !oauthProvider.isResourceAllowed(req.auth.resource)) {
+        logEvent(config.logging, "warn", "auth_denied", {
+          requestId,
+          method: req.method,
+          path: requestPath(req),
+          reason: "invalid_oauth_resource",
+          ...requestLogFields(req, config),
+        });
+        sendJsonRpcError(res, 401, -32001, "Unauthorized");
+        return;
+      }
     }
 
     logEvent(config.logging, "debug", "mcp_request", {

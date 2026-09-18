@@ -334,7 +334,11 @@ async function serve(): Promise<void> {
     if (config.allowedHosts.includes("*")) {
       console.warn("warning: Host header allowlist is disabled because server.allowedHosts contains '*'");
     }
-    console.log("auth: Owner password approval required");
+    console.log(
+      process.env.DEVSPACE_AUTH_MODE?.trim().toLowerCase() === "none"
+        ? "auth: disabled for loopback MCP"
+        : "auth: Owner password approval required",
+    );
     console.log(`logging: ${config.logging.level} ${config.logging.format}`);
     console.log(`subagent providers: ${formatLocalAgentProviderStatusSummary(localAgentProviders)}`);
   });
